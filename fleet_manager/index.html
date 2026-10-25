@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intelligent Fleet Management System</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; background: #f2f4f8; color: #222; }
+  header { background: #12355b; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 22px; }
+  .wrap { padding: 20px 24px; max-width: 1200px; margin: auto; }
+  .cards { display: flex; gap: 16px; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 150px; background: #fff; border-radius: 8px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+  .card h3 { margin: 0 0 6px; font-size: 13px; color: #666; font-weight: normal; }
+  .card .val { font-size: 26px; font-weight: bold; }
+  .panel { background: #fff; border-radius: 8px; padding: 16px; margin-top: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+  #map { height: 380px; border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 8px; text-align: left; border-bottom: 1px solid #eee; }
+  th { background: #fafafa; }
+  .badge { padding: 2px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
+  .badge.OK { background: #1a8f3c; } .badge.Warning { background: #e08a00; } .badge.Service { background: #d12d2d; }
+  .bar { background: #e5e7eb; border-radius: 4px; height: 8px; width: 80px; display: inline-block; vertical-align: middle; }
+  .bar span { display: block; height: 100%; border-radius: 4px; }
+  .alert { font-size: 12px; color: #b32020; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: #12355b; color: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+<header><h1>Intelligent Fleet Management System</h1></header>
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><h3>Total Vehicles</h3><div class="val" id="total">0</div></div>
+    <div class="card"><h3>Healthy</h3><div class="val" style="color:#1a8f3c" id="ok">0</div></div>
+    <div class="card"><h3>Warnings</h3><div class="val" style="color:#e08a00" id="warning">0</div></div>
+    <div class="card"><h3>Needs Service</h3><div class="val" style="color:#d12d2d" id="service">0</div></div>
+    <div class="card"><h3>Avg Speed (km/h)</h3><div class="val" id="avg">0</div></div>
+  </div>
+
+  <div class="panel">
+    <button id="toggle">Pause</button>
+    <div id="map" style="margin-top:12px"></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">Fleet Status</h3>
+    <table>
+      <thead><tr><th>Vehicle</th><th>Driver</th><th>Speed</th><th>Fuel</th><th>Engine °C</th>
+        <th>Tyre psi</th><th>Battery V</th><th>Km since service</th><th>AI maint. risk</th><th>Status</th><th>Alerts</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const COLORS = { OK: "#1a8f3c", Warning: "#e08a00", Service: "#d12d2d" };
+let map = null, markers = {}, running = true;
+
+document.getElementById("toggle").onclick = e => {
+  running = !running;
+  e.target.textContent = running ? "Pause" : "Resume";
+};
+
+function riskColor(r) { return r >= 0.5 ? "#d12d2d" : r >= 0.25 ? "#e08a00" : "#1a8f3c"; }
+
+async function tick() {
+  if (!running) return;
+  const data = await (await fetch("/api/fleet")).json();
+
+  if (!map) {
+    map = L.map("map").setView(data.center, 12);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
+  }
+
+  const s = data.summary;
+  document.getElementById("total").textContent = s.total;
+  document.getElementById("ok").textContent = s.ok;
+  document.getElementById("warning").textContent = s.warning;
+  document.getElementById("service").textContent = s.service;
+  document.getElementById("avg").textContent = s.avg_speed;
+
+  data.vehicles.forEach(v => {
+    const pos = [v.lat, v.lon];
+    const popup = `<b>${v.id}</b> (${v.type})<br>${v.driver}<br>${v.speed} km/h`;
+    if (!markers[v.id]) {
+      markers[v.id] = L.circleMarker(pos, { radius: 9, color: "#fff", weight: 2, fillOpacity: 0.95 }).addTo(map);
+    }
+    markers[v.id].setLatLng(pos).setStyle({ fillColor: COLORS[v.status] }).bindPopup(popup);
+  });
+
+  document.getElementById("rows").innerHTML = data.vehicles.map(v => `
+    <tr>
+      <td><b>${v.id}</b> <small>${v.type}</small></td><td>${v.driver}</td><td>${v.speed}</td><td>${v.fuel}%</td>
+      <td>${v.engine_temp}</td><td>${v.tyre_pressure}</td><td>${v.battery_voltage}</td><td>${v.km_since_service}</td>
+      <td><span class="bar"><span style="width:${v.maintenance_risk * 100}%;background:${riskColor(v.maintenance_risk)}"></span></span> ${Math.round(v.maintenance_risk * 100)}%</td>
+      <td><span class="badge ${v.status}">${v.status}</span></td>
+      <td class="alert">${v.alerts.join(", ")}</td>
+    </tr>`).join("");
+}
+setInterval(tick, 2000);
+tick();
+</script>
+</body>
+</html>
